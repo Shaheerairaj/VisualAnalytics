@@ -1,0 +1,655 @@
+---
+title: "vi"
+author: "Huda Ouda, Saif AlKhuraisat, Shaheer Ahmed, Sonali Kannan, Zainab Alhashmi"
+date: "12/29/2020"
+output:
+  pdf_document:
+      toc: true
+      toc_depth: 2
+      number_sections: true
+header-includes:
+  \usepackage{booktabs}
+---
+
+# Introduction
+
+This report provides insights from the NYC311 dataset which reflects all the calls received from the residents of different boroughs. 311 is a helpline number that provides access to New York City government services through eight platforms: Call Center, Social Media, Mobile App, Text, Video Relay Service and TTY/text telephone. NYC311 is a database for all the complaints received by people who are living in New York. The line “311” is similar
+to the idea of “911”, however, it is for non-emergency calls. Its mission is to provide the public with quick
+and easy access to all NYC government services to achieve best customer service. The service started to
+widespread in 2010 till date.
+
+With this report, we are hoping that these insights could provide some proactive measures the agencies could work on to reduce number of complaints logged by residents. 
+
+We have worked with two datasets using RMarkdown, NYC311 and the population changes over the years.
+
+# Context
+
+New York City, the most populous metropolitan area in the United States, is home to over 8.3 million residents.
+To serve this massive and diverse population the City operates the nation’s largest and most complex
+municipal government with more than 350,000 city employees and 120 agencies, offices and organizations
+offering over 4,000 different services to residents.
+
+Most of the calls from the New Yorkers are related to complaints about public space, buildings, noise, street
+conditions as well as other non-emergency issues. After receiving the calls, the call center agents at 311
+forward the issues to the relevant departments in NY City to take an action and then close the loop of the
+complaint. This service is not only benefiting the people of New York, but also benefiting the government.
+
+The NYC311 works like a net that holds the city together. Whenever there is a call request, the NYC311
+system automatically saves the location in a huge database that feed’s info through NYC government.
+
+Through this huge database, data scientists use NYC311 for analysis, and accurate measurement of data to eventually improve city government.
+
+# About the Data
+
+The NYC311 dataset includes 51 attributes excluding the unique key variable and over 9 million rows. Each observation/row in the file, represents a complaint logged by a resident. The attributes describe this complaint by including which agency it belongs to, when the creation date is, time, the location and status among other descriptive attributes. 
+
+As for the additional dataset we used, the population estimates over years, it includes a total of 165 attributes in it's original version since it is showing the population trend from 2010 – 2019, yearly basis as well as many other attributes which were not useful for our analysis. After some cleaning and rearranging we brought the dataset down to 3 attributes including "Borough", "Year", and "Population" containing 25 entries.
+
+# Initializing
+
+In this section we initialize the data by loading relevant libraries and storing the data in a variable called 'nyc311'. This will store the observations of the csv file to the object after which we will replace the space in the names of columns by '.' to eliminate the use for quotations every time we try to name a column.
+
+```{r initialize, include=FALSE, warning=FALSE, message=FALSE, echo=FALSE}
+
+suppressWarnings(suppressPackageStartupMessages(library(tidyverse)))
+suppressWarnings(suppressPackageStartupMessages(library(data.table)))
+suppressWarnings(suppressPackageStartupMessages(library(dplyr)))
+suppressWarnings(suppressPackageStartupMessages(library(pander)))
+suppressWarnings(suppressPackageStartupMessages(library(lubridate)))
+suppressWarnings(suppressPackageStartupMessages(library(xtable)))
+
+nyc311<-fread("311_Service_Requests_from_2010_to_Present.csv")
+names(nyc311)<-names(nyc311) %>%
+  stringr::str_replace_all("\\s", ".")
+
+#Displaying head of table to be used
+nyc311 <- select(nyc311,-Unique.Key)
+sample <- distinct(nyc311)
+all_equal(sample,nyc311)
+
+sample <- sample %>%
+  select(Agency, Complaint.Type, Status, Borough, Location.Type, Created.Date,
+         Closed.Date, Latitude, Longitude,Incident.Zip)
+  
+pander(head(sample))
+
+#Inferring Boroughs
+unspecified<-sample %>% 
+  filter(Borough=='Unspecified') %>% 
+  select(-Borough)
+
+boroughZip<-fread("borough-zip.tsv",header=FALSE,col.names=c('Borough','Incident.Zip'))
+unspecified$Incident.Zip<-str_replace(unspecified$Incident.Zip,"-[0-9][0-9][0-9][0-9]","")
+joined<-inner_join(unspecified,boroughZip)
+specified<-sample%>%filter(Borough!='Unspecified')
+boundData<-bind_rows(specified,joined)
+df <- boundData
+
+# The resulting dataframe has entries in the lower case form of the Boroughs so in order to fix it
+
+df$Borough <- replace(df$Borough, df$Borough == 'Brooklyn', 'BROOKLYN')
+df$Borough <- replace(df$Borough, df$Borough == 'Bronx', 'BRONX')
+df$Borough <- replace(df$Borough, df$Borough == 'Manhattan', 'MANHATTAN')
+df$Borough <- replace(df$Borough, df$Borough == 'Queens', 'QUEENS')
+df$Borough <- replace(df$Borough, df$Borough == 'Staten_Island', 'STATEN ISLAND')
+unique(df$Borough)
+
+#Converting complaint created dates
+df$Created.Date <- parse_date_time(df$Created.Date, orders = '%m/%d/%Y %H:%M:%S %p')
+df$Closed.Date <- parse_date_time(df$Closed.Date, orders = '%m/%d/%Y %H:%M:%S %p')
+
+time <- df
+time$year <- year(time$Created.Date)
+time$month <- month(time$Created.Date,label=TRUE)
+time$hour <- hour(time$Created.Date)
+```
+
+# NYC311 Data Extract
+
+Here we can see an extract of the data we are going to be working with. It lays out a brief of the attributes that we are using for our analysis and the information contained in them.
+
+``` {r extract,size='footnotesize', message = FALSE, results="asis", echo = FALSE,warning = FALSE}
+
+pander(head(df))
+
+```
+
+# Findings
+
+Here we make use of visualization techniques to get a look inside the data and what its trying to tell us. We look for trends and insights that could be of use to anyone who is concerned with them.
+
+But first lets analyze our selected 'sample' to see if it has any null rows or duplicates and fix them
+
+## Top 10 Agencies That Received Complaints
+
+Here we see the top 10 agencies to which complaints have been forwarded to where Housing Preservation & Development received the most of the complaints followed by Department of Transportation and then New York Police Department. This shows most complaints were not of a emergency response nature.
+
+``` {r agency, warning=FALSE, message=FALSE, echo = FALSE}
+
+suppressWarnings(suppressPackageStartupMessages(library(scales)))
+agency_count <- df %>%
+  mutate(Agency = fct_lump(Agency,n=9)) %>%
+  count(Agency)
+
+k <- function(x){number_format(accuracy=1,
+                                scale=1/1000,
+                                suffix='k',
+                                big.mark=',')(x)}
+
+agency_count %>%
+  ggplot(aes(x= reorder(Agency,-n), y=n)) +
+  geom_col(fill='royalblue') +
+  scale_y_continuous(label = k) +
+  labs(title='Top 10 Agencies That Received Complaints',
+       x='Agency',
+       y='Count')
+```
+
+
+## Top 10 Types of Complaints Made
+
+``` {r complaint type, warning=FALSE, message=FALSE, echo = FALSE}
+
+cType <- df %>% 
+  mutate(Complaint.Type = fct_lump(Complaint.Type,n=10)) %>% 
+  group_by(Complaint.Type) %>%
+  count(Complaint.Type)
+
+cType <- cType[1:10,]
+
+ggplot(cType, aes(Complaint.Type,n),fill=Complaint.Type) +
+  geom_segment(aes(x=Complaint.Type,xend=Complaint.Type,y=0,yend=n),alpha=0.5,
+               color="royalblue")+
+  geom_point(size=5, color="royalblue")+
+  scale_y_continuous(label=k) +
+  coord_flip()+
+  theme(axis.text.x = element_text(angle = 90, size=8)) +
+  labs(title='Top 10 Complaints Made',
+       y='No. of Complaint Made',
+       x='Complaint')
+
+```
+
+From the above graph we can identify "HEATING" as the most registered complaint throughout New York State followed by "Street Condition" which will be the focus of our analysis later.
+
+## Distribution of Complaints by Borough
+
+``` {r distribution, warning=FALSE, message=FALSE, echo = FALSE}
+
+Borough_count <- df %>%
+  count(Borough)
+
+Borough_count %>%
+  ggplot(aes(x=reorder(Borough,n),y=n)) +
+  geom_col(fill='royalblue') +
+  labs(title='Distribution of Complaints by Borough',
+       x='Borough',
+       y='Count') +
+  scale_y_continuous(label=k) +
+  coord_polar()
+
+```
+
+Brooklyn seems to have the highest number of registered complaints and could be classified as a troubled Borough followed by Queens and Manhattan.
+
+## Location of Complaints in Each Borough
+
+The below bar graph shows that most complaints that come in are about something happening in residential buildings followed by streets and sidewalks.
+
+``` {r complaints, warning=FALSE, message=FALSE, echo = FALSE}
+
+suppressWarnings(suppressPackageStartupMessages(library(RColorBrewer)))
+location <- df %>% group_by(Borough,Location.Type) %>%
+  count(Location.Type) %>%
+  filter(n>20000)
+
+location$Location.Type <- replace(location$Location.Type,
+                                    location$Location.Type=="",NA)
+location <- na.omit(location)
+
+ggplot(location,aes(x=reorder(Location.Type,n),y=n)) +
+  geom_col(aes(fill=Borough)) +
+  scale_fill_brewer(palette = "Blues",direction=-1) +
+  scale_y_continuous(label=k) +
+  coord_flip() +
+  labs(title='Most Occurring Locations of Complaints in each Borough',
+       x='Location of Complaints',
+       y='Number of Complaints')
+```
+
+## Yearly Distribution of Complaints
+
+Let's have a look at the distribution of the number of complaints in each Borough every year. This will give us a better understanding of the years to pay attention to for each Borough and give us a head start to look at any time-series analysis we might be interested in. We have to keep in mind the reason for the section for 2015 being so small is because the data is only avaiable till April and so is incomplete.
+
+``` {r treemap, warning = FALSE, echo = FALSE}
+
+suppressWarnings(suppressPackageStartupMessages(library(treemap)))
+
+treemap(time,
+        index = c("Borough","year"),
+        vSize = "year",
+        type = "index",
+        fontsize.title = 0)
+
+```
+
+## Time-Series Analysis of Calls Made each Month per Year
+
+Each area graph below shows us the trend of calls for each year. The number of calls peak during January and March consistently for each year. And then we have a steady number of calls made throughout the summer as well. All time-series analysis from this point will exclude all years before 2010 and the year 2015 as it has incomplete data.
+
+``` {r hour, warning=FALSE, message=FALSE, echo=FALSE}
+
+count_month <- time %>% 
+  group_by(month,year) %>%
+  count(month) %>%
+  filter(year>=2010 && year<2015)
+
+ggplot(count_month, aes(month,n,group=year,fill=year)) +
+  geom_line(aes(fill=year),alpha=0.4) +
+  geom_area(data = filter(count_month, year == 2010),alpha=0.4) +
+  geom_area(data = filter(count_month, year == 2011),alpha=0.4) +
+  geom_area(data = filter(count_month, year == 2012),alpha=0.4) +
+  geom_area(data = filter(count_month, year == 2013),alpha=0.4) +
+  geom_area(data = filter(count_month, year == 2014),alpha=0.4) +
+  scale_y_continuous(label=k) +
+  coord_cartesian(ylim=c(50000,175000)) +
+  labs(title = 'Trend of Calls per Month each Year',
+       x= 'Month',
+       y= 'Number of Calls')
+
+```
+
+## Complaints Made During Peak Times of January and March
+
+The most number of complaints made in January were concerning heating issues which makes sense as that is one of the peak times of winter. And the peak we get in March has the highest complaints of "Street Condition". But where do these complaints come from?
+
+``` {r peak times, warning=FALSE, message=FALSE, echo=FALSE}
+
+peak <- time %>%
+  select(Complaint.Type,month) %>%
+  filter(month=="Jan" | month == "Mar") %>%
+  mutate(Complaint.Type = fct_lump(Complaint.Type,n=5)) %>%
+  group_by(Complaint.Type,month) %>%
+  count(Complaint.Type)
+
+peak <- peak[1:10,]
+
+ggplot(peak,aes(reorder(Complaint.Type,n),n),group=month) +
+  scale_fill_brewer(palette = "Paired") +
+  geom_col(aes(fill=month))+
+  scale_y_continuous(label=k) +
+  coord_flip() +
+  labs(title="Top Complaints in January and March",
+       x="Complaints",
+       y="Number of Complaints")
+```
+
+## Complaints Location During January and March
+
+Most heating complaints come from Brooklyn and most street condition complaints from Queens. Looking back at the "Most Occurring Locations of Complaints in each Borough" which states that the top 2 locations of complaints are in residential building and streets, the above plot proves consistent with heating complaints coming from residential building and street condition problems as such as well.
+
+```{r loc, warning=FALSE, message=FALSE, echo=FALSE}
+
+loc <- time %>%
+  select(Borough,Complaint.Type,month) %>%
+  filter(Complaint.Type == "HEATING" | Complaint.Type == "Street Condition") %>%
+  filter(month == "Jan" | month == "Mar") %>%
+  group_by(Borough,Complaint.Type,month) %>%
+  count(Borough)
+
+ggplot(loc, aes(Borough,n,fill=Complaint.Type),group=month) +
+  geom_col(fill="royalblue") +
+  facet_wrap(~ Complaint.Type) +
+  theme(axis.text.x = element_text(angle=45)) +
+  scale_y_continuous(label=k) +
+  labs(title="Location of Complaints",
+       x="Borough",
+       y="Number of Complaints")
+
+```
+
+## Processing Time of Service Requests
+
+We had a good look about involved agencies, type of complaints, boroughs and geolocation of complaints yet we should have a holistic view and that why we need to dive into the distribution of processing time of the top 5 complaints in each borough
+
+```{r resolution time, warning=FALSE, message=FALSE, echo=FALSE}
+
+suppressWarnings(suppressPackageStartupMessages(library(ggridges)))
+time$Process.Time=time$Closed.Date-time$Created.Date
+time$Process.Time=time$Process.Time/86400
+res <- time %>%
+  select(Borough,Complaint.Type,Process.Time) %>%
+  filter(Process.Time>0) %>%
+  filter(Complaint.Type == "HEATING" | Complaint.Type == "Street Condition" |
+           Complaint.Type == "GENERAL CONSTRUCTION" |
+           Complaint.Type == "Street Light Condition" | 
+           Complaint.Type == "PLUMBING")
+
+ggplot(res,aes(Process.Time,Complaint.Type,fill=Complaint.Type)) +
+  scale_fill_brewer( palette = "Blues") +
+  geom_density_ridges(alpha=0.8) +
+  theme_ridges() +
+  theme(legend.position = "none", axis.text.x = element_text(size=8),
+        axis.text.y = element_text(size=8)) +
+  coord_cartesian(xlim = c(0, 60)) +
+  facet_wrap(~Borough) +
+  labs(title="Complaint Processing Time Distribution",
+       x="Processing Time in Days",
+       y="Complaints")
+
+```
+As we can see, relatively most complaints are resolved within 10 days. Heating and street lighting condition problems seem to be the highest in number of complaints made and are the quickest to be resolved. The longest time taken is general construction.
+
+
+## Status of Top 5 Complaints
+
+``` {r status of top 5, warning=FALSE, message=FALSE, echo=FALSE}
+group_count <- df
+
+#Replacing all relevant entries as closed
+group_count$Status <- replace(group_count$Status,
+                          group_count$Status==("Closed - By Phone"),"Closed")
+group_count$Status <- replace(group_count$Status,
+                          group_count$Status==("Closed - Email Sent"),"Closed")
+group_count$Status <- replace(group_count$Status,
+                          group_count$Status==("Closed - In-Person"),"Closed")
+group_count$Status <- replace(group_count$Status,
+                          group_count$Status==("Closed - Insufficient Info"),"Closed")
+group_count$Status <- replace(group_count$Status,
+                          group_count$Status==("Closed - Letter Sent"),"Closed")
+group_count$Status <- replace(group_count$Status,
+                          group_count$Status==("Closed - No Response Needed"),"Closed")
+group_count$Status <- replace(group_count$Status,
+                          group_count$Status==("Closed - Other"),"Closed")
+group_count$Status <- replace(group_count$Status,
+                          group_count$Status==("Closed - Testing"),"Closed")
+
+#Replacing all relevant entries as open
+group_count$Status <- replace(group_count$Status,
+                          group_count$Status==("Assigned"),"Open")
+group_count$Status <- replace(group_count$Status,
+                          group_count$Status==("Draft"),"Open")
+group_count$Status <- replace(group_count$Status,
+                          group_count$Status==("Email Sent"),"Open")
+group_count$Status <- replace(group_count$Status,
+                          group_count$Status==("In Progress"),"Open")
+group_count$Status <- replace(group_count$Status,
+                          group_count$Status==("In Progress - Needs Approval"),"Open")
+group_count$Status <- replace(group_count$Status,
+                          group_count$Status==("Started"),"Open")
+group_count$Status <- replace(group_count$Status,
+                          group_count$Status==("To Be Rerouted"),"Open")
+group_count$Status <- replace(group_count$Status,
+                          group_count$Status==("Unable To Respond"),"Open")
+group_count$Status <- replace(group_count$Status,
+                          group_count$Status==("Unassigned"),"Open")
+group_count$Status <- replace(group_count$Status,
+                          group_count$Status==("Unspecified"),"Open")
+
+status <- group_count %>%
+  select(Borough,Complaint.Type,Status) %>%
+  filter(Complaint.Type == "HEATING" | Complaint.Type == "Street Condition" |
+           Complaint.Type == "GENERAL CONSTRUCTION" | 
+           Complaint.Type == "Street Light Condition" | 
+           Complaint.Type == "PLUMBING") %>%
+  group_by(Borough,Complaint.Type,Status) %>%
+  count(Complaint.Type)
+
+status$Status <- replace(status$Status,status$Status==("Assigned"),"Open")
+status$Status <- replace(status$Status,status$Status==("Unassigned"),"Open")
+status$Status <- replace(status$Status,status$Status==("Unspecified"),"Open")
+
+
+ggplot(data = status,aes(Complaint.Type,n),group=Status) +
+  geom_col(aes(fill=Status)) +
+  scale_fill_brewer(palette = "Paired") +
+  theme(axis.text.x = element_text(angle=90, size= 7),
+        axis.text.y = element_text(size=8)) +
+  scale_y_continuous(label=k) +
+  facet_wrap(~Borough) +
+  labs(title="Status of Complaints in Each Borough",
+       x="Complaints",
+       y="Number of complaints")
+
+```
+
+The above graph represents the status of the complaints in each Borough. We have mapped all relevant statuses to "Open" and "Closed" and kept "Pending" as it is since these 3 were identified to be the most relevant of all categories of statuses. Most cases present in this dataset seemed to have been closed but street light condition complaints have quite a few number which are still open and pending.
+
+## Data for Population of Boroughs (Joining NYC311 and Population Data)
+
+We managed to find a dataset containing information on the population of each Borough throughout the years 2010 to 2015. Since the NYC311 data lacks complete information on the complaints made in 2015 it was omitted from the below analysis. The data for population was very untidy with a lot of columns and unnecessary data. Some cleaning process was applied to get the data into a simple format with 25 rows and 3 relevant columns such as Borough name, Year, and population corresponding to each year for every Borough.
+
+The below table represents an extract of the cleaned population dataset, summarized NYC311 complaints dataset as well as the joined dataset formed once the population data was joined respectively. The summarized NYC311 complaints data represents the highest number of complaints made each year, which happens to consistently be "HEATING" in every Borough.
+
+``` {r population, message = FALSE, warning = FALSE, echo=FALSE}
+
+#Filtering the relevant counties from NY state
+population<-fread("PopulationEstimates.csv")
+
+pop<-population %>% filter(State =="NY") %>% filter(Area_Name == "Bronx County" 
+                                                    | Area_Name == "Kings County"
+                                                    |Area_Name== "New York County"
+                                                    | Area_Name == "Queens County"
+                                                    |Area_Name == "Richmond County")
+#Saving useful columns
+pop <- pop %>%
+select(Area_Name,POP_ESTIMATE_2010,POP_ESTIMATE_2011,POP_ESTIMATE_2012,
+POP_ESTIMATE_2013,POP_ESTIMATE_2014,POP_ESTIMATE_2015,POP_ESTIMATE_2016,
+POP_ESTIMATE_2017,POP_ESTIMATE_2018,POP_ESTIMATE_2019)
+# Replace spaces with "." for County names in the "Area Names" column, the below
+#code is used for column values
+pop$Area_Name <- gsub( " ", ".", pop$Area_Name)
+
+# To ensure proper joining between two datasets, we should unify borough names
+#in both datasets, hence, we use the replace function for the population dataset.
+pop$Area_Name <- replace(pop$Area_Name, pop$Area_Name == "Bronx.County",
+values = "BRONX")
+pop$Area_Name <- replace(pop$Area_Name, pop$Area_Name == "Kings.County",
+values = "BROOKLYN")
+pop$Area_Name <- replace(pop$Area_Name, pop$Area_Name == "New.York.County",
+values = "MANHATTAN")
+pop$Area_Name <- replace(pop$Area_Name, pop$Area_Name == "Queens.County",
+values = "QUEENS")
+pop$Area_Name <- replace(pop$Area_Name, pop$Area_Name == "Richmond.County",
+values = "STATEN ISLAND")
+
+# Preparing the population data to be in the correct format
+colnames(pop)[colnames(pop)=="Area_Name"]<-"Borough"
+
+pop <- pop %>%
+    gather('POP_ESTIMATE_2010','POP_ESTIMATE_2011','POP_ESTIMATE_2012',
+           'POP_ESTIMATE_2013','POP_ESTIMATE_2014','POP_ESTIMATE_2015',
+           'POP_ESTIMATE_2016','POP_ESTIMATE_2017','POP_ESTIMATE_2018',
+           'POP_ESTIMATE_2019', key = "year", value = "population")
+
+pop$year <- gsub("[^0-9.-]", "", pop$year)
+pop$population <- gsub(",", "",pop$population)
+pop$population <- as.numeric(pop$population)
+pop$year <- as.numeric(pop$year)
+pop <- pop %>%
+  filter(year < 2015)
+
+#Summarizing data to be in the proper format for joining
+#NYC311 data is summarized to show top complaints of each Borough every year
+complaints <- time %>%
+  filter(year > 2009 | year <2015) %>%
+  mutate(Complaint.Type = fct_lump(Complaint.Type, n=1)) %>%
+  group_by(Borough, year,Complaint.Type) %>%
+  summarize(Heating.Complaints = n()) %>% 
+  filter(Complaint.Type != "Other")
+
+random <- time %>%
+  filter(year >= 2010 & year <= 2014) %>%
+  group_by(Borough,year) %>%
+  summarize(No.of.Complaints = n())
+
+complaints$Total.Complaints <- random$No.of.Complaints
+
+#Joining the datasets
+dataframe <- inner_join(complaints,pop)
+```
+
+
+*Table showing the population data of each Borough per year*
+
+``` {r population table, size='footnotesize', message = FALSE, results="asis", echo = FALSE,warning = FALSE}
+
+pander(head(pop))
+
+```
+
+
+*Table showing summarized data of the top complaints every year from NYC311*
+
+``` {r top cmplaints, size='footnotesize', message = FALSE, results="asis", echo = FALSE,warning = FALSE}
+
+pander(head(complaints))
+
+```
+
+
+*Table showing the joined dataset of the above two tables.*
+
+``` {r joined, size='footnotesize', message = FALSE, results="asis", echo = FALSE,warning = FALSE}
+
+pander(head(dataframe))
+
+```
+
+## Population of Each Borough
+
+We already know that Brooklyn comes out highest in terms of the number of complaints registered out of all Boroughs. We can now confirm that is due to Brooklyn being the highest in population out of all. There isn't much drastic change in the change of population each increasing year.
+
+``` {r population size, warning=FALSE, message=FALSE, echo=FALSE}
+
+ggplot(dataframe, aes(year,population,fill=Borough)) +
+  geom_bar(position="dodge", stat="identity") +
+  scale_y_continuous(label=k) +
+  labs(title="Total Population per Year",
+       x="Year",
+       y="Population")
+  
+
+```
+
+## Trend of Total Number of Complaints per Capita
+
+We can now find out what the situation in each Borough looks when we see the number of complaints made per capita over the years. Dividing the number of complaints by the population allows us to look at the trend in an un-biased manner by removing the population bias since there is a drastic difference in the population of Brooklyn and Staten Island (nearly 2 million people). The trend we see is slightly alarming as complaints seem to have sharply risen after 2013 and as of 2014, Manhattan leads in the number of complaints made per capita followed by Bronx and Brooklyn.
+
+``` {r complaints per capita, warning=FALSE, message=FALSE, echo=FALSE}
+
+dataframe$Total.Complaints.Per.Capita <- ((dataframe$Total.Complaints)/dataframe$population)
+
+ggplot(dataframe, aes(year,Total.Complaints.Per.Capita)) +
+  geom_line(aes(color=Borough),size=1.5,alpha=0.6) +
+  geom_point(aes(color=Borough), size=3.5, alpha=0.75) +
+  labs(title = "Trend of  Total No. of Complaints per Capita",
+       x="Year",
+       y="Complaints per Capita")
+```
+
+## Total Distribution of Heating Complaints
+
+We know that heating complaints constitutes the highest number of complaints made every year. So which Boroughs report the highest number of these complaints overall? The below graph gives us a look into this insight.
+
+``` {r donut, warning=FALSE, message=FALSE, echo=FALSE}
+
+donut <- time %>%
+  select(Borough, year, Complaint.Type) %>%
+  group_by(Borough) %>%
+  filter(Complaint.Type == "HEATING") %>%
+  summarise(No.of.Complaints = n())
+
+#Calculation for Doughnut chart
+sum <- sum(donut$No.of.Complaints)
+donut$fraction <- donut$No.of.Complaints/sum
+donut$ymax <- cumsum(donut$fraction)
+donut$ymin <- c(0, head(donut$ymax, n=-1))
+# Compute label position
+donut$labelPosition <- (donut$ymax + donut$ymin) / 2
+# Compute a good label
+donut$label <- paste0(donut$Borough, "\n value: ", donut$No.of.Complaints)
+
+ggplot(donut, aes(ymax=ymax, ymin=ymin, xmax=4, xmin=3, fill=Borough)) +
+  geom_rect() +
+  geom_label( x=3.5, aes(y=labelPosition, label=label), size=3) +
+  coord_polar(theta="y") +
+  xlim(c(1, 4)) +
+  theme_void() +
+  theme(legend.position = "none")
+
+```
+
+## Trend of Heating Complaints per Capita
+
+Now that we know which Boroughs have the highest number of heating complaints and even the number of complaints, let's see how their trend looks to be over time. The below line graph shows us a trend that we see for the complaints made for each Borough throughout 2010 to 2014 in regards to heating complaints. We can see a clear drop in number of cases being registered especially after 2013 but Bronx maintains the most number of heating complaints made per capita with Brooklyn and Manhattan battling for second and third place.
+
+``` {r heating, warning=FALSE, message=FALSE, echo=FALSE}
+
+dataframe$Heating.Complaints.Per.Capita <- ((dataframe$Heating.Complaints)/dataframe$population)
+
+ggplot(dataframe, aes(year,Heating.Complaints.Per.Capita)) +
+  geom_line(aes(color=Borough),size=1.5,alpha=0.6) +
+  geom_point(aes(color=Borough), size=3.5, alpha=0.75) +
+  labs(title = "Trend of Heating Complaints per Capita",
+       x="Year",
+       y="Complaints per Capita")
+
+```
+
+# Conclusion
+
+We have used two datasets for our insights in this report, NYC311, and population changes over the years in each borough. 
+
+Our exploration of the data revealed many insights on the agencies receiving complaints, the distribution of complaints, and trends over time. 
+
+The top three agencies that received complaints are HPD, DOT, and NYPD. Also, livable spaces (residential buildings) registered the highest number of complaints across all boroughs than in commercial areas (store, club, bar, or restaurants). 
+
+We found out the majority of the cases reported in this database had been closed by April 2015 which is where our data cuts off at.
+
+Moreover, Heating problems remain prevalent throughout the state of New York but is one of the quickest to be resolved. These complaints reach their peaks in January and March consistently every year. 
+
+Per capita analysis removes Brooklyn from the top of the list even though it has a high number of populations and put Manhattan followed by Bronx. This helps in avoiding population bias.
+
+Based on our insights, we recommend the below to ensure excellent services provided to the NYC population: 
+
+•	The relevant agencies must investigate the gas supply to buildings with central heaters and the quality control of different heater types installed in buildings and sold in the state.
+
+•	More workers for these agencies need to available in Brooklyn as it comes out on top in most analysis of complaints that we have conducted mostly due to having the largest population in New York.
+
+
+
+# Appendix
+
+## Data Dictionary for NYC311 Data
+
+``` {r dictionary,size='footnotesize', message = FALSE, results="asis", echo = FALSE,warning = FALSE}
+
+description <- c("Agency Complaint was Reported to","Type of Complaint",
+                 "Status of Submitted Complaint","Borough from which Complaint was filled",
+                 "Location Type of Complaint","Date Complaint was Created",
+                 "Date Complaint was Closed","Latitude of Location of Complaint",
+                 "Longitude of Location of Complaint",
+                 "Zip code of the Location of Complaint")
+
+column <- c("Agency","Complaint.Type","Status","Borough","Location.Type","Created.Date",
+            "Closed.Date","Latitude","Longitude","Incident.Zip")
+
+dictionary <- data.frame("Description" = description, "Column Name" = column)
+pander(dictionary)
+```
+
+## Data Dictionary for Joined Population Data
+
+``` {r population dictionary,size='footnotesize', message = FALSE, results="asis", echo = FALSE,warning = FALSE}
+
+r <- c("Name of Borough where complaint was registered","Year complaint was registered",
+          "Type of complaint","Number of complaints related to 'HEATING'",
+          "Total number of complaints registered","Total population at the time")
+
+c <- c("Borough","year","Complaint.Type","Heating.Complaints","Total.Complaints",
+       "population")
+
+d <- data.frame("Description" = r, "Column Name" = c)
+pander(d)
+```
